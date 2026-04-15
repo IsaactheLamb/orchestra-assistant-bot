@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from telegram import (
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReactionTypeEmoji,
+    ReplyKeyboardMarkup,
     Update,
 )
 from telegram.error import BadRequest
@@ -107,7 +109,7 @@ def _persist_checklist(topic_id: int) -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def handle_dm_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle any non-command DM from a coordinator (schedule text)."""
+    """Handle any non-command DM from a coordinator (schedule text or keyboard button)."""
     if not update.message or not update.effective_user:
         return
 
@@ -121,6 +123,32 @@ async def handle_dm_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     text = (update.message.text or update.message.caption or '').strip()
     if not text:
         return
+
+    # ── Keyboard button shortcuts ─────────────────────────────────────────────
+    if text == BTN_EXTRACT:
+        await cmd_extract(update, context)
+        return
+
+    if text == BTN_HELP:
+        await cmd_help(update, context)
+        return
+
+    if text == BTN_CHECKLIST:
+        topics = cfg.get('topics', {})
+        topic_list = '\n'.join(f'  • {name}' for name in topics) if topics else '  (none configured)'
+        await update.message.reply_text(
+            '📋 Post a checklist by sending:\n\n'
+            '/postchecklist [Topic Name]\n'
+            '[checklist text]\n\n'
+            f'Available topics:\n{topic_list}\n\n'
+            'Example:\n'
+            '/postchecklist Attendance\n'
+            '◻️1. Anna\n'
+            '◻️2. Ben\n'
+            '◻️3. Chris'
+        )
+        return
+    # ─────────────────────────────────────────────────────────────────────────
 
     try:
         sessions, members = parse_schedule(text)
@@ -369,19 +397,39 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Coordinator keyboard
+# ═════════════════════════════════════════════════════════════════════════════
+
+BTN_EXTRACT   = '📊 Extract Session Report'
+BTN_CHECKLIST = '📋 Post Checklist'
+BTN_HELP      = '❓ Help'
+
+COORD_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_EXTRACT], [BTN_CHECKLIST], [BTN_HELP]],
+    resize_keyboard=True,
+    is_persistent=True,
+)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Commands
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        '🎵 Orchestra Assistant Bot\n\n'
-        'Commands for coordinators:\n'
-        '• Forward me the weekly schedule → I parse it and offer session buttons\n'
-        '• /extract — Re-show session buttons for a schedule you already sent\n'
-        '• /postchecklist [topic] — Post and pin a checklist in a group topic\n'
-        '• /help — Schedule formatting rules\n\n'
-        'In the group, members send e.g. ✅Isaac or ⚠️Karina to update the checklist.'
-    )
+    cfg = load_config()
+    uid = update.effective_user.id
+    if is_coordinator(uid, cfg):
+        await update.message.reply_text(
+            '🎵 Orchestra Assistant Bot\n\n'
+            'Use the buttons below or forward me the weekly schedule to get started.\n\n'
+            'In the group, members send e.g. ✅Name or ⚠️Name to update the checklist.',
+            reply_markup=COORD_KEYBOARD,
+        )
+    else:
+        await update.message.reply_text(
+            '🎵 Orchestra Assistant Bot\n\n'
+            'In the group, send e.g. ✅Name or ⚠️Name to update the attendance checklist.'
+        )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -524,6 +572,16 @@ async def cmd_postchecklist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # Entry point
 # ═════════════════════════════════════════════════════════════════════════════
 
+async def post_init(app: Application) -> None:
+    """Register bot commands with Telegram on startup."""
+    await app.bot.set_my_commands([
+        BotCommand('start',          'Show main menu'),
+        BotCommand('extract',        'Extract a session report'),
+        BotCommand('postchecklist',  'Post a checklist to a group topic'),
+        BotCommand('help',           'Schedule formatting rules'),
+    ])
+
+
 def main() -> None:
     cfg = load_config()
     token = cfg.get('bot_token', '')
@@ -535,7 +593,7 @@ def main() -> None:
 
     _load_checklists_from_config(cfg)
 
-    app = Application.builder().token(token).build()
+    app = Application.builder().token(token).post_init(post_init).build()
 
     # Commands (private DM only for coordinator commands)
     app.add_handler(CommandHandler('start', cmd_start))
