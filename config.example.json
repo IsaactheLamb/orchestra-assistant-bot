@@ -1,0 +1,13 @@
+{
+  "bot_token": "YOUR_BOT_TOKEN_HERE",
+  "group_chat_id": -1001234567890,
+  "coordinator_ids": [
+    123456789,
+    987654321
+  ],
+  "topics": {
+    "Attendance": 12345,
+    "General": 1
+  },
+  "active_checklists": {}
+}
