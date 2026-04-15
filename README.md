@@ -127,23 +127,23 @@ Tap the session you want. If there is only one session, the bot skips this step.
 ```
 ┌ ORCHESTRA REHEARSAL
 📆 Wednesday, 16th April | 9:15PM
-📍 NC, Babyroom
+📍 Rehearsal Venue
 🙏 Representative Prayer:
 
 Total: 13
 
 ✅ Attending (11/13)
-◽️1. Isaac
-✅2. Cardin
+◽️1. Member A
+✅2. Member B
 ...
 
 🕐 Late (0/13)
 —
 
 ❌ Absent (4/15)
-❌1. Karina
-❌2. Jet (Overseas)
-❌3. Lolo (Family)
+❌1. Member C
+❌2. Member D (Overseas)
+❌3. Member E (Family)
 ```
 
 **Status key:**
@@ -176,11 +176,11 @@ Send the bot a private message:
 
 ```
 /postchecklist Attendance
-◻️◻️1. Isaac
-◻️◻️2. Karina
-◻️◻️3. Katherine
-◻️◻️4. Alice
-◻️◻️5. Joseph
+◻️◻️1. Member A
+◻️◻️2. Member B
+◻️◻️3. Member C
+◻️◻️4. Member D
+◻️◻️5. Member E
 ```
 
 The bot posts the checklist to the named topic, pins it, and starts monitoring that topic for updates.
@@ -201,14 +201,14 @@ Members send a message in the group topic:
 
 | Message sent | Effect on checklist |
 |---|---|
-| `✅Isaac` | Marks Isaac as attending |
-| `⚠️Karina` | Marks Karina as late |
-| `❌James` | Marks James as absent |
-| `◻️Isaac` | Resets Isaac back to blank |
+| `✅Anna` | Marks Anna as attending |
+| `⚠️Ben` | Marks Ben as late |
+| `❌Chris` | Marks Chris as absent |
+| `◻️Anna` | Resets Anna back to blank |
 
 **Matching rules:**
-- Case-insensitive — `✅isaac` works the same as `✅Isaac`
-- Partial names are matched if unique — `✅Isa` will match Isaac if no one else starts with "Isa"
+- Case-insensitive — `✅anna` works the same as `✅Anna`
+- Partial names are matched if unique — `✅Ann` will match Anna if no one else starts with "Ann"
 - Ambiguous partial matches are ignored silently
 
 **Bot reactions:**
@@ -223,18 +223,18 @@ If your checklist has multiple columns (e.g. two tasks per person), members send
 
 **Checklist:**
 ```
-◻️◻️1. Isaac
-◻️◻️2. Karina
+◻️◻️1. Member A
+◻️◻️2. Member B
 ```
 
 **Updates:**
 
 | Message | Resulting line | Meaning |
 |---|---|---|
-| `✅◻️Isaac` | `✅◻️1. Isaac` | Task 1 done, task 2 pending |
-| `◻️✅Isaac` | `◻️✅1. Isaac` | Task 1 pending, task 2 done |
-| `✅✅Isaac` | `✅✅1. Isaac` | Both tasks done |
-| `◻️◻️Isaac` | `◻️◻️1. Isaac` | Reset both |
+| `✅◻️Anna` | `✅◻️1. Anna` | Task 1 done, task 2 pending |
+| `◻️✅Anna` | `◻️✅1. Anna` | Task 1 pending, task 2 done |
+| `✅✅Anna` | `✅✅1. Anna` | Both tasks done |
+| `◻️◻️Anna` | `◻️◻️1. Anna` | Reset both |
 
 The bot replaces the entire emoji prefix with exactly what you sent. The number of emojis should match the number of columns.
 
@@ -249,8 +249,8 @@ The coordinator maintains the weekly schedule message manually and forwards it t
 ```
 🎵 Orchestra Schedule
 - ••••••••••••••••••••
-1️⃣ Wed 16 Apr | Orchestra Rehearsal | 9:15PM (📍 NC, Babyroom)
-2️⃣ Sat 18 Apr | Choir Rehearsal | 4:00PM (📍 NC, Babyroom)
+1️⃣ Wed 16 Apr | Orchestra Rehearsal | 9:15PM (📍 Venue A)
+2️⃣ Sat 18 Apr | Choir Rehearsal | 4:00PM (📍 Venue A)
 3️⃣ Sun 19 Apr | Orchestra Bonding | 3:00PM (📍 TBC)
 1️⃣ Exp: ☑️ Yes · ⛔️ No
 *️⃣ Act:  ✅ On time · ⚠️ Late · ❌ Absent
@@ -258,16 +258,16 @@ The coordinator maintains the weekly schedule message manually and forwards it t
 1️⃣*️⃣|2️⃣*️⃣|3️⃣*️⃣
 ━━━━━━━━━━━━━━━━━━━━━
 🎻 STRINGS
-☑️▫️|▫️▫️|▫️▫️ 1. Isaac
-▫️▫️|▫️▫️|▫️▫️ 2. Cardin
+☑️▫️|▫️▫️|▫️▫️ 1. Member A
+▫️▫️|▫️▫️|▫️▫️ 2. Member B
 🎵 WINDS
-▫️▫️|▫️▫️|▫️▫️ 6. Karina
+▫️▫️|▫️▫️|▫️▫️ 6. Member C
 🎺 BRASS
-▫️▫️|▫️▫️|▫️▫️ 10. Luis
+▫️▫️|▫️▫️|▫️▫️ 10. Member D
 🥁 PERCUSSION
-▫️▫️|▫️▫️|▫️▫️ 13. Joseph
-⛔️⛔️|⛔️⛔️|⛔️⛔️ 14. Jet (Overseas)
-⛔️⛔️|⛔️⛔️|⛔️⛔️ 15. Lolo (Family)
+▫️▫️|▫️▫️|▫️▫️ 13. Member E
+⛔️⛔️|⛔️⛔️|⛔️⛔️ 14. Member F (Overseas)
+⛔️⛔️|⛔️⛔️|⛔️⛔️ 15. Member G (Family)
 - ••••••••••••••••••••
 ```
 
