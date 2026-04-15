@@ -318,6 +318,18 @@ def _apply_prefix(line: str, new_prefix: str) -> str:
     return new_prefix + stripped
 
 
+async def _react(update: Update, context: ContextTypes.DEFAULT_TYPE, emoji: str) -> None:
+    """Helper to react to the triggering message, silently ignoring failures."""
+    try:
+        await context.bot.set_message_reaction(
+            chat_id=update.message.chat_id,
+            message_id=update.message.message_id,
+            reaction=[ReactionTypeEmoji(emoji=emoji)],
+        )
+    except Exception:
+        pass
+
+
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Watch group messages for emoji-name status updates (e.g. ✅Isaac)."""
     if not update.message or not update.effective_chat:
@@ -336,31 +348,34 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if not prefix:
         return
 
-    # Telegram sends message_thread_id=None for the General topic (thread 1).
-    # All other topics have their actual thread ID set.
-    raw_tid = update.message.message_thread_id
-    topic_id = raw_tid if raw_tid is not None else 1
-
-    if topic_id not in _checklists:
+    # Must be a reply to a checklist message.
+    reply_to = update.message.reply_to_message
+    if reply_to is None:
+        # Sent without replying — react 🤨 to signal they need to reply to the checklist
+        await _react(update, context, '🤨')
         return
+
+    # Identify which checklist was replied to by matching message_id
+    replied_msg_id = reply_to.message_id
+    match = next(
+        ((tid, d) for tid, d in _checklists.items() if d['message_id'] == replied_msg_id),
+        None,
+    )
+    if match is None:
+        # Replied to something that isn't an active checklist — react 🤨
+        await _react(update, context, '🤨')
+        return
+    topic_id, data = match
 
     if not name:
         return
 
-    data = _checklists[topic_id]
     lines: List[str] = data['lines']
 
     idx = _find_line_index(name, lines)
     if idx is None:
         # Name not recognised — react with 🤔
-        try:
-            await context.bot.set_message_reaction(
-                chat_id=update.message.chat_id,
-                message_id=update.message.message_id,
-                reaction=[ReactionTypeEmoji(emoji='🤔')],
-            )
-        except Exception:
-            pass
+        await _react(update, context, '🤔')
         return
 
     lines[idx] = _apply_prefix(lines[idx], prefix)
@@ -385,15 +400,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     _persist_checklist(topic_id)
-
-    try:
-        await context.bot.set_message_reaction(
-            chat_id=update.message.chat_id,
-            message_id=update.message.message_id,
-            reaction=[ReactionTypeEmoji(emoji='👍')],
-        )
-    except Exception:
-        pass
+    await _react(update, context, '👍')
 
 
 # ═════════════════════════════════════════════════════════════════════════════
