@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+
+# Runtime / local state
+bot.log
+attendance_state.json
+sessions.json
+members.json

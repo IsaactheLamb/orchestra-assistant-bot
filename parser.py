@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple
 
 # ── Emoji constants ────────────────────────────────────────────────────────────
 
@@ -12,7 +12,8 @@ NUMERAL_EMOJIS: List[str] = [
 ]
 
 EMOJI_EXPECTED_YES  = '☑️'   # attending (expected)
-EMOJI_EXPECTED_NO   = '⛔️'  # not attending (expected)
+EMOJI_EXPECTED_NO   = '⚫️'  # not attending (expected) — fills both expected & actual
+EMOJI_EXPECTED_LATE = '🕐'  # expected to be late
 EMOJI_ACTUAL_ONTIME = '✅'   # on time
 EMOJI_ACTUAL_LATE   = '⚠️'  # late
 EMOJI_ACTUAL_ABSENT = '❌'   # absent
@@ -27,6 +28,8 @@ STATUS_EMOJIS: List[str] = [
 STATUS_EMOJIS_SORTED = sorted(STATUS_EMOJIS, key=len, reverse=True)
 
 SECTION_EMOJIS: List[str] = ['🎻', '🎵', '🎺', '🥁', '🎸', '🎹', '🪘', '🎷', '🎼', '🪗']
+
+REPEAT_EMOJI = '🔁'  # reason applies to all sessions
 
 # Words / phrases that identify legend / key lines – skip these.
 LEGEND_KEYWORDS: List[str] = [
@@ -54,8 +57,9 @@ class Session:
 @dataclass
 class Member:
     name:    str                          # clean name
-    reason:  str                          # absence reason or ''
-    section: str                          # section label
+    reasons: Dict[int, str] = field(default_factory=dict)
+    # reasons: {0: 'all sessions', 1: 'session 1 only', 2: 'session 2 only', …}
+    section: str = ''                     # section label
     columns: List[Tuple[str, str]] = field(default_factory=list)
     # columns[i] = (expected_emoji, actual_emoji) for session i
 
@@ -78,9 +82,22 @@ def is_decorative(line: str) -> bool:
 
 def starts_with_numeral_emoji(line: str) -> Optional[Tuple[str, int, str]]:
     """Returns (emoji, 1-based-index, remainder) or None."""
+    norm = _normalize_vs(line)
     for idx, emoji in enumerate(NUMERAL_EMOJIS):
-        if line.startswith(emoji):
-            return emoji, idx + 1, line[len(emoji):]
+        norm_emoji = _normalize_vs(emoji)
+        if norm.startswith(norm_emoji):
+            # Find where the remainder starts in the original string
+            # by consuming the same number of base characters
+            orig_i = 0
+            consumed = 0
+            while orig_i < len(line) and consumed < len(norm_emoji):
+                if line[orig_i] != '\uFE0F':
+                    consumed += 1
+                orig_i += 1
+            # Skip any trailing FE0F
+            while orig_i < len(line) and line[orig_i] == '\uFE0F':
+                orig_i += 1
+            return emoji, idx + 1, line[orig_i:]
     return None
 
 
@@ -99,16 +116,28 @@ def extract_section_name(line: str) -> str:
     return line.strip()
 
 
+def _normalize_vs(text: str) -> str:
+    """Strip variation selector U+FE0F for reliable emoji matching."""
+    return text.replace('\uFE0F', '')
+
+
+# Normalized emoji lookup: stripped form → canonical form (with variation selector)
+_STATUS_NORM_MAP = {_normalize_vs(e): e for e in STATUS_EMOJIS}
+_STATUS_NORM_SORTED = sorted(_STATUS_NORM_MAP.keys(), key=len, reverse=True)
+
+
 def extract_emojis_from_str(s: str) -> List[str]:
-    """Return all STATUS_EMOJIS found in order, left-to-right."""
+    """Return all STATUS_EMOJIS found in order, left-to-right.
+    Handles variation selector inconsistencies."""
+    norm = _normalize_vs(s)
     emojis: List[str] = []
     i = 0
-    while i < len(s):
+    while i < len(norm):
         matched = False
-        for emoji in STATUS_EMOJIS_SORTED:
-            if s[i:].startswith(emoji):
-                emojis.append(emoji)
-                i += len(emoji)
+        for emoji_norm in _STATUS_NORM_SORTED:
+            if norm[i:].startswith(emoji_norm):
+                emojis.append(_STATUS_NORM_MAP[emoji_norm])
+                i += len(emoji_norm)
                 matched = True
                 break
         if not matched:
@@ -128,6 +157,67 @@ def parse_status_columns(prefix: str) -> List[Tuple[str, str]]:
         actual   = emojis[1] if len(emojis) > 1 else EMOJI_UNSET
         columns.append((expected, actual))
     return columns
+
+
+# ── Reason parsing ───────────────────────────────────────────────────────────
+
+def parse_reason_string(raw: str) -> Dict[int, str]:
+    """
+    Parse a session-annotated reason string into {session_num: text}.
+    Key 0 means 'applies to all sessions'.
+
+    Examples:
+      'Overseas'            → {0: 'Overseas'}        (no prefix — backward compat)
+      '🔁Overseas'          → {0: 'Overseas'}        (explicit all-sessions)
+      '1️⃣Family'           → {1: 'Family'}
+      '1️⃣6:30PM, work'     → {1: '6:30PM, work'}
+      '1️⃣Family. 2️⃣Work'  → {1: 'Family', 2: 'Work'}
+    """
+    raw = raw.strip()
+    if not raw:
+        return {}
+
+    if raw.startswith(REPEAT_EMOJI):
+        text = raw[len(REPEAT_EMOJI):].strip()
+        return {0: text} if text else {}
+
+    # Check whether it starts with any numeral emoji
+    norm_raw = _normalize_vs(raw)
+    norm_numerals = [_normalize_vs(e) for e in NUMERAL_EMOJIS]
+    if not any(norm_raw.startswith(ne) for ne in norm_numerals):
+        return {0: raw}  # plain reason — all sessions
+
+    result: Dict[int, str] = {}
+    i = 0
+    while i < len(norm_raw):
+        found_num = None
+        found_len = 0
+        for num, norm_emoji in enumerate(norm_numerals, 1):
+            if norm_raw[i:].startswith(norm_emoji):
+                found_num = num
+                found_len = len(norm_emoji)
+                break
+        if found_num is None:
+            break
+        i += found_len
+        # Find where next numeral emoji starts (or end of string)
+        next_start = len(norm_raw)
+        for norm_emoji in norm_numerals:
+            pos = norm_raw.find(norm_emoji, i)
+            if pos != -1 and pos < next_start:
+                next_start = pos
+        segment = norm_raw[i:next_start].strip().rstrip('. ')
+        if segment:
+            result[found_num] = segment
+        i = next_start
+
+    return result
+
+
+def get_reason_for_session(member: 'Member', session_num: int) -> str:
+    """Return the reason to display for a member in a specific session (1-based).
+    Falls back to the global reason (key 0) if no session-specific one exists."""
+    return member.reasons.get(session_num) or member.reasons.get(0, '')
 
 
 # ── Session line parsing ──────────────────────────────────────────────────────
@@ -200,26 +290,38 @@ def try_parse_member_line(line: str, section: str) -> Optional[Member]:
     if '|' not in line:
         return None
 
-    # Walk character-by-character to find where the emoji/pipe prefix ends.
+    # Walk character-by-character on normalized string to find emoji/pipe prefix.
+    norm = _normalize_vs(line)
     i = 0
     last_boundary = 0
-    while i < len(line):
-        if line[i] == '|':
+    while i < len(norm):
+        if norm[i] == '|':
             i += 1
             last_boundary = i
             continue
         found = False
-        for emoji in STATUS_EMOJIS_SORTED:
-            if line[i:].startswith(emoji):
-                i += len(emoji)
+        for emoji_norm in _STATUS_NORM_SORTED:
+            if norm[i:].startswith(emoji_norm):
+                i += len(emoji_norm)
                 last_boundary = i
                 found = True
                 break
         if not found:
             break
 
-    status_prefix = line[:last_boundary]
-    name_part = line[last_boundary:].strip()
+    # Map normalized boundary back to original string position
+    orig_boundary = 0
+    norm_count = 0
+    while orig_boundary < len(line) and norm_count < last_boundary:
+        if line[orig_boundary] != '\uFE0F':
+            norm_count += 1
+        orig_boundary += 1
+    # Skip trailing FE0F
+    while orig_boundary < len(line) and line[orig_boundary] == '\uFE0F':
+        orig_boundary += 1
+
+    status_prefix = line[:orig_boundary]
+    name_part = line[orig_boundary:].strip()
 
     if not status_prefix or not name_part:
         return None
@@ -234,17 +336,17 @@ def try_parse_member_line(line: str, section: str) -> Optional[Member]:
     name_part = re.sub(r'^\d+\.\s*', '', name_part).strip()
 
     # Extract reason in () or []
-    reason = ''
+    reasons: Dict[int, str] = {}
     reason_match = REASON_RE.search(name_part)
     if reason_match:
-        reason = reason_match.group(1).strip()
+        reasons = parse_reason_string(reason_match.group(1).strip())
         name_part = name_part[:reason_match.start()].strip()
 
     name = name_part.strip()
     if not name:
         return None
 
-    return Member(name=name, reason=reason, section=section, columns=columns)
+    return Member(name=name, reasons=reasons, section=section, columns=columns)
 
 
 # ── Top-level parser ──────────────────────────────────────────────────────────
@@ -366,29 +468,28 @@ def format_session_report(
     session_idx = session.number - 1
 
     active   = [m for m in members if not is_long_term_absent(m, num_sessions)]
-    lt_absent = [m for m in members if is_long_term_absent(m, num_sessions)]
     total    = len(active)
 
-    attending: List[Tuple[str, Member]] = []
-    late:      List[Member] = []
-    absent:    List[Member] = []
+    attending:   List[Member] = []
+    late:        List[Member] = []
+    unconfirmed: List[Member] = []
+    absent:      List[Member] = []
 
     for m in active:
         status = get_member_status(m, session_idx)
         if status == 'attending':
-            attending.append(('✅', m))
+            attending.append(m)
         elif status == 'late':
             late.append(m)
         elif status == 'absent':
             absent.append(m)
-        else:  # unset → listed under attending as unconfirmed
-            attending.append(('◽️', m))
+        else:
+            unconfirmed.append(m)
 
     lines: List[str] = []
     lines.append(f'┌ {session.title.upper()}')
     lines.append(f'📆 {format_date(session.date_str)} | {session.time_str}')
     lines.append(f'📍 {session.location}')
-    lines.append('🙏 Representative Prayer:')
     lines.append('')
     lines.append(f'Total: {total}')
     lines.append('')
@@ -396,8 +497,8 @@ def format_session_report(
     # Attending
     lines.append(f'✅ Attending ({len(attending)}/{total})')
     if attending:
-        for i, (prefix, m) in enumerate(attending, 1):
-            lines.append(f'{prefix}{i}. {m.name}')
+        for i, m in enumerate(attending, 1):
+            lines.append(f'✅{i}. {m.name}')
     else:
         lines.append('—')
     lines.append('')
@@ -406,21 +507,27 @@ def format_session_report(
     lines.append(f'🕐 Late ({len(late)}/{total})')
     if late:
         for i, m in enumerate(late, 1):
-            lines.append(f'⚠️{i}. {m.name}')
+            reason = get_reason_for_session(m, session.number)
+            suffix = f' ({reason})' if reason else ''
+            lines.append(f'⚠️{i}. {m.name}{suffix}')
     else:
         lines.append('—')
     lines.append('')
 
-    # Absent (session-absent active members + long-term absent)
-    absent_display: List[Tuple[str, str]] = (
-        [(m.name, '') for m in absent] +
-        [(m.name, m.reason) for m in lt_absent]
-    )
-    lines.append(f'❌ Absent ({len(absent_display)}/{total + len(lt_absent)})')
-    if absent_display:
-        for i, (name, reason) in enumerate(absent_display, 1):
+    # Unconfirmed (unset status) — omit section when empty
+    if unconfirmed:
+        lines.append(f'◽️ Unconfirmed ({len(unconfirmed)}/{total})')
+        for i, m in enumerate(unconfirmed, 1):
+            lines.append(f'◽️{i}. {m.name}')
+        lines.append('')
+
+    # Absent (session-absent active members only; long-term absent hidden)
+    lines.append(f'❌ Absent ({len(absent)}/{total})')
+    if absent:
+        for i, m in enumerate(absent, 1):
+            reason = get_reason_for_session(m, session.number)
             suffix = f' ({reason})' if reason else ''
-            lines.append(f'❌{i}. {name}{suffix}')
+            lines.append(f'❌{i}. {m.name}{suffix}')
     else:
         lines.append('—')
 
