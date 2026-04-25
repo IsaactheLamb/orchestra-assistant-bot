@@ -129,7 +129,7 @@ async def handle_cancel_prayer(update: Update, context: ContextTypes.DEFAULT_TYP
 # ── /report command – manual trigger ──────────────────────────────────────────
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Usage: /report [session_number]  — generates report for given session (default: all)"""
+    """Usage: /report [session_number] — with no arg, shows session-picker buttons."""
     if not is_admin(update.effective_user.id):
         return
     if update.effective_chat.type != "private":
@@ -140,36 +140,56 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("⚠️ No sessions found for the current week.")
         return
 
-    # Parse session number arg
     args = context.args
-    if args:
-        try:
-            n = int(args[0])
-            indices = [n - 1]
-        except ValueError:
-            await update.message.reply_text("Usage: /report [session_number]")
-            return
-    else:
-        indices = list(range(len(sessions)))
+    if not args:
+        from helpers import format_date_display, format_time_display
+        kb_rows = []
+        for idx, s in enumerate(sessions):
+            label = f"{idx+1}. {s['day'][:3]} {format_date_display(s['date'])} {format_time_display(s['time'])}"
+            kb_rows.append([InlineKeyboardButton(label, callback_data=f"report_show_{idx}")])
+        await update.message.reply_text(
+            "📊 Which session?",
+            reply_markup=InlineKeyboardMarkup(kb_rows),
+        )
+        return
 
+    try:
+        idx = int(args[0]) - 1
+    except ValueError:
+        await update.message.reply_text("Usage: /report [session_number]")
+        return
+
+    if idx < 0 or idx >= len(sessions):
+        await update.message.reply_text(f"⚠️ Session {idx+1} not found.")
+        return
+
+    await _send_session_report(update.message.chat_id, idx, context)
+
+
+async def _send_session_report(chat_id: int, idx: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    sessions = load_sessions()
     members_data = load_members()
     active = members_data.get("active", [])
     lta = members_data.get("long_term_absent", [])
     state = load_attendance()
     attendance = state.get("attendance", {})
+    session = sessions[idx]
+    prayer = state.get("session_report_prayers", {}).get(str(idx + 1), "")
+    report_text = render_session_report(session, idx, active, lta, attendance, prayer)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📋 Copy Report", callback_data=f"report_copy_{idx}"),
+        InlineKeyboardButton("✏️ Edit Report", callback_data=f"report_edit_{idx}"),
+    ]])
+    await context.bot.send_message(chat_id, report_text, reply_markup=kb)
 
-    for idx in indices:
-        if idx < 0 or idx >= len(sessions):
-            await update.message.reply_text(f"⚠️ Session {idx+1} not found.")
-            continue
-        session = sessions[idx]
-        prayer = state.get("session_report_prayers", {}).get(str(idx + 1), "")
-        report_text = render_session_report(session, idx, active, lta, attendance, prayer)
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📋 Copy Report", callback_data=f"report_copy_{idx}"),
-            InlineKeyboardButton("✏️ Edit Report", callback_data=f"report_edit_{idx}"),
-        ]])
-        await update.message.reply_text(report_text, reply_markup=kb)
+
+async def handle_report_show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    if not is_admin(update.effective_user.id):
+        await q.answer(); return
+    await q.answer()
+    idx = int(q.data.replace("report_show_", ""))
+    await _send_session_report(q.message.chat_id, idx, context)
 
 
 # ── Generate Report menu button ────────────────────────────────────────────────
@@ -210,6 +230,7 @@ def build_handlers() -> list:
     return [
         CallbackQueryHandler(handle_copy_report, pattern=r"^report_copy_\d+$"),
         CallbackQueryHandler(handle_edit_report, pattern=r"^report_edit_\d+$"),
+        CallbackQueryHandler(handle_report_show, pattern=r"^report_show_\d+$"),
         CallbackQueryHandler(handle_menu_report, pattern=r"^menu_report$"),
         # Prayer text input — must come BEFORE the generic cancel command handler
         MessageHandler(
