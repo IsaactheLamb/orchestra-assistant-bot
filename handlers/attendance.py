@@ -8,6 +8,8 @@ Supported syntax (auto-detected):
               e.g.  ☑️☑️⛔️Isaac  →  sessions 1,2,3
               emojis must all be attendance emojis, immediately before the name
 """
+from __future__ import annotations
+
 import re
 import logging
 from telegram import Update, ReactionTypeEmoji
