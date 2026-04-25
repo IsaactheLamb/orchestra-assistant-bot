@@ -49,6 +49,7 @@ from board import render_attendance_board
 from storage import (
     load_sessions as load_sessions_data,
     load_members as load_members_data,
+    save_members as save_members_data,
     load_attendance as load_attendance_data,
     save_attendance as save_attendance_data,
 )
@@ -165,6 +166,29 @@ def is_coordinator(user_id: int, cfg: Dict[str, Any]) -> bool:
     return user_id in cfg.get('coordinator_ids', [])
 
 
+def is_owner(user_id: int, cfg: Dict[str, Any]) -> bool:
+    return user_id == cfg.get('owner_id')
+
+
+def _active_profile(cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the active profile dict, or None if profiles aren't configured."""
+    profiles = cfg.get('profiles')
+    name = cfg.get('active_profile')
+    if profiles and name and name in profiles:
+        return profiles[name]
+    return None
+
+
+def get_group_chat_id(cfg: Dict[str, Any]) -> Optional[int]:
+    p = _active_profile(cfg)
+    return p.get('group_chat_id') if p else cfg.get('group_chat_id')
+
+
+def get_topics(cfg: Dict[str, Any]) -> Dict[str, int]:
+    p = _active_profile(cfg)
+    return p.get('topics', {}) if p else cfg.get('topics', {})
+
+
 # ── In-memory state ───────────────────────────────────────────────────────────
 
 # {user_id: (sessions, members)} — set when coordinator forwards a schedule
@@ -248,7 +272,7 @@ async def handle_dm_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     if text == BTN_CHECKLIST:
-        topics = cfg.get('topics', {})
+        topics = get_topics(cfg)
         topic_list = '\n'.join(f'  • {name}' for name in topics) if topics else '  (none configured)'
         await update.message.reply_text(
             '📋 Post a checklist by sending:\n\n'
@@ -819,7 +843,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     cfg = load_config()
-    group_chat_id = cfg.get('group_chat_id')
+    group_chat_id = get_group_chat_id(cfg)
     if not group_chat_id or update.effective_chat.id != group_chat_id:
         return
 
@@ -965,30 +989,42 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        '📋 ORCHESTRA ASSISTANT BOT – Schedule Formatting Rules\n\n'
-        'To keep the bot working correctly, follow these rules when updating the schedule:\n\n'
-        '✅ You CAN freely change:\n'
-        '- Session titles, dates, times, locations\n'
-        '- Number of sessions\n'
-        '- Number of members\n'
-        '- Section headers (🎻 WINDS etc.)\n'
-        '- Decorative lines (•••, ━━━)\n\n'
-        '⚠️ Please DO NOT change:\n'
-        '- Session emojis: must use 1️⃣2️⃣3️⃣ (not plain numbers)\n'
-        '- Column separator: must use | between columns\n'
-        '- Status emojis: ▫️ ☑️ ⚫️ 🕐 ✅ ⚠️ ❌ must stay consistent\n'
-        '- Location prefix: keep 📍 before location names\n'
-        '- Reasons: keep them in () or [] after the name\n'
-        '  · No prefix → applies to all sessions, e.g. (Overseas)\n'
-        '  · 🔁 prefix → all sessions, e.g. (🔁Overseas)\n'
-        '  · Session emoji → specific session, e.g. (1️⃣Family)\n'
-        '  · Multiple: (1️⃣Family. 2️⃣Work)\n'
-        '  · Late with time: (1️⃣6:30PM, work)\n'
-        '- Slot order: left slot = expected, right slot = actual\n\n'
-        '❓ If extraction fails, the bot will tell you. '
-        'Use /extract to try again after fixing the format.'
-    )
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    lines = ['📋 ORCHESTRA ASSISTANT BOT', '']
+    lines.append('🔧 Commands (coordinators)')
+    lines.append('  /start — show main menu')
+    lines.append('  /help — this message')
+    lines.append('  /extract — extract a session report')
+    lines.append('  /postchecklist <topic> — post a checklist to a group topic')
+    lines.append('  /postschedule — post the live attendance board')
+
+    if is_owner(uid, cfg):
+        lines.append('')
+        lines.append('👑 Owner-only commands')
+        lines.append('  /listcoordinators — show owner + coordinators')
+        lines.append('  /addcoordinator <id> — add a coordinator')
+        lines.append('  /removecoordinator <id> — remove a coordinator')
+        lines.append('  /listmembers — show members by section')
+        lines.append('  /addmember <Section> <Name> — add a member')
+        lines.append('  /removemember <Name> — remove a member')
+        lines.append('  /movemember <Name> <Section> — change section')
+        lines.append('  /currentchat — show active chat profile')
+        lines.append('  /togglechat — switch between test & prod chats')
+
+    lines.append('')
+    lines.append('📝 Schedule formatting (for /extract)')
+    lines.append('✅ Can change: titles, dates, times, locations, sections, member count')
+    lines.append('⚠️ Do not change:')
+    lines.append('  • Session emojis (1️⃣2️⃣3️⃣…)')
+    lines.append('  • | between columns')
+    lines.append('  • Status emojis: ▫️☑️⚫️🕐✅⚠️❌')
+    lines.append('  • 📍 before location')
+    lines.append('  • Reason syntax: (Text), (🔁Text), (1️⃣Text), (1️⃣Text. 2️⃣Text)')
+    lines.append('  • Left slot = expected, right = actual')
+
+    await update.message.reply_text('\n'.join(lines))
 
 
 async def cmd_extract(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1059,13 +1095,13 @@ async def cmd_postchecklist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text('Please include the checklist text below the command.')
         return
 
-    group_chat_id = cfg.get('group_chat_id')
+    group_chat_id = get_group_chat_id(cfg)
     if not group_chat_id:
         await update.message.reply_text('⚠️ group_chat_id is not set in config.json.')
         return
 
     # Resolve topic name → topic thread ID
-    topics: Dict[str, int] = cfg.get('topics', {})
+    topics: Dict[str, int] = get_topics(cfg)
     topic_id: Optional[int] = None
     for t_name, t_id in topics.items():
         if t_name.lower() == topic_name.lower():
@@ -1132,6 +1168,284 @@ async def cmd_postschedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+async def cmd_addcoordinator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/addcoordinator <telegram_user_id> — owner only."""
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    if not is_owner(uid, cfg):
+        await update.message.reply_text('Sorry, this command is for the bot owner only.')
+        return
+
+    args = context.args or []
+    if len(args) != 1 or not args[0].lstrip('-').isdigit():
+        await update.message.reply_text(
+            'Usage: /addcoordinator <telegram_user_id>\n\n'
+            'Ask the person to DM @userinfobot on Telegram to get their ID.'
+        )
+        return
+
+    new_id = int(args[0])
+    coord_ids = cfg.setdefault('coordinator_ids', [])
+    if new_id in coord_ids:
+        await update.message.reply_text(f'{new_id} is already a coordinator.')
+        return
+
+    coord_ids.append(new_id)
+    save_config(cfg)
+    await update.message.reply_text(f'✅ Added {new_id} as coordinator.')
+
+
+async def cmd_removecoordinator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/removecoordinator <telegram_user_id> — owner only."""
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    if not is_owner(uid, cfg):
+        await update.message.reply_text('Sorry, this command is for the bot owner only.')
+        return
+
+    args = context.args or []
+    if len(args) != 1 or not args[0].lstrip('-').isdigit():
+        await update.message.reply_text('Usage: /removecoordinator <telegram_user_id>')
+        return
+
+    target = int(args[0])
+    if target == cfg.get('owner_id'):
+        await update.message.reply_text('Cannot remove the owner.')
+        return
+
+    coord_ids = cfg.get('coordinator_ids', [])
+    if target not in coord_ids:
+        await update.message.reply_text(f'{target} is not a coordinator.')
+        return
+
+    coord_ids.remove(target)
+    save_config(cfg)
+    await update.message.reply_text(f'✅ Removed {target} from coordinators.')
+
+
+VALID_SECTIONS = ['Strings', 'Winds', 'Brass', 'Percussion']
+
+
+def _canonical_section(name: str) -> Optional[str]:
+    for s in VALID_SECTIONS:
+        if s.lower() == name.lower():
+            return s
+    return None
+
+
+async def cmd_listmembers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/listmembers — show active members grouped by section. Owner only."""
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    if not is_owner(uid, cfg):
+        await update.message.reply_text('Sorry, this command is for the bot owner only.')
+        return
+
+    data = load_members_data()
+    active = data.get('active', [])
+    lta = data.get('long_term_absent', [])
+
+    lines = ['👥 MEMBERS', '']
+    for section in VALID_SECTIONS:
+        in_section = [m['name'] for m in active if m.get('section') == section]
+        lines.append(f'{section} ({len(in_section)})')
+        if in_section:
+            lines.extend(f'  • {n}' for n in in_section)
+        else:
+            lines.append('  (none)')
+        lines.append('')
+
+    if lta:
+        lines.append(f'Long-term absent ({len(lta)})')
+        for m in lta:
+            reason = m.get('reason', '')
+            lines.append(f'  • {m["name"]} ({reason})' if reason else f'  • {m["name"]}')
+
+    await update.message.reply_text('\n'.join(lines).rstrip())
+
+
+async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/addmember <Section> <Name> — add an active member. Owner only."""
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    if not is_owner(uid, cfg):
+        await update.message.reply_text('Sorry, this command is for the bot owner only.')
+        return
+
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            'Usage: /addmember <Section> <Name>\n\n'
+            f'Sections: {", ".join(VALID_SECTIONS)}\n'
+            'Example: /addmember Strings Alice'
+        )
+        return
+
+    section = _canonical_section(args[0])
+    if not section:
+        await update.message.reply_text(
+            f'Invalid section "{args[0]}". Valid: {", ".join(VALID_SECTIONS)}'
+        )
+        return
+    name = ' '.join(args[1:]).strip()
+
+    data = load_members_data()
+    if any(m['name'].lower() == name.lower() for m in data.get('active', [])):
+        await update.message.reply_text(f'"{name}" is already in the member list.')
+        return
+
+    data.setdefault('active', []).append({'name': name, 'section': section})
+    save_members_data(data)
+    await update.message.reply_text(f'✅ Added {name} to {section}.')
+
+
+async def cmd_removemember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/removemember <Name> — remove from active members. Owner only."""
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    if not is_owner(uid, cfg):
+        await update.message.reply_text('Sorry, this command is for the bot owner only.')
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text('Usage: /removemember <Name>')
+        return
+
+    name = ' '.join(args).strip()
+    data = load_members_data()
+    active = data.get('active', [])
+    match = next((m for m in active if m['name'].lower() == name.lower()), None)
+    if not match:
+        await update.message.reply_text(f'No active member named "{name}".')
+        return
+
+    active.remove(match)
+    save_members_data(data)
+    await update.message.reply_text(f'✅ Removed {match["name"]} from {match["section"]}.')
+
+
+async def cmd_movemember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/movemember <Name> <Section> — change a member's section. Owner only."""
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    if not is_owner(uid, cfg):
+        await update.message.reply_text('Sorry, this command is for the bot owner only.')
+        return
+
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            'Usage: /movemember <Name> <Section>\n\n'
+            f'Sections: {", ".join(VALID_SECTIONS)}'
+        )
+        return
+
+    section = _canonical_section(args[-1])
+    if not section:
+        await update.message.reply_text(
+            f'Invalid section "{args[-1]}". Valid: {", ".join(VALID_SECTIONS)}'
+        )
+        return
+    name = ' '.join(args[:-1]).strip()
+
+    data = load_members_data()
+    active = data.get('active', [])
+    match = next((m for m in active if m['name'].lower() == name.lower()), None)
+    if not match:
+        await update.message.reply_text(f'No active member named "{name}".')
+        return
+
+    old_section = match.get('section')
+    if old_section == section:
+        await update.message.reply_text(f'{match["name"]} is already in {section}.')
+        return
+
+    match['section'] = section
+    save_members_data(data)
+    await update.message.reply_text(f'✅ Moved {match["name"]}: {old_section} → {section}.')
+
+
+async def cmd_togglechat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/togglechat — flip between the two configured chat profiles. Owner only."""
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    if not is_owner(uid, cfg):
+        await update.message.reply_text('Sorry, this command is for the bot owner only.')
+        return
+
+    profiles = cfg.get('profiles') or {}
+    names = list(profiles.keys())
+    if len(names) != 2:
+        await update.message.reply_text(
+            f'Toggle requires exactly 2 profiles; found {len(names)}.'
+        )
+        return
+
+    current = cfg.get('active_profile')
+    new_name = names[1] if current == names[0] else names[0]
+    cfg['active_profile'] = new_name
+    save_config(cfg)
+
+    new_id = profiles[new_name].get('group_chat_id')
+    await update.message.reply_text(
+        f'🔀 Switched to profile "{new_name}"\n'
+        f'   chat_id: {new_id}'
+    )
+
+
+async def cmd_currentchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/currentchat — show the active profile. Owner only."""
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    if not is_owner(uid, cfg):
+        await update.message.reply_text('Sorry, this command is for the bot owner only.')
+        return
+
+    profiles = cfg.get('profiles') or {}
+    current = cfg.get('active_profile', '(none)')
+    p = profiles.get(current, {})
+    topic_lines = '\n'.join(f'     • {n} → {i}' for n, i in p.get('topics', {}).items()) or '     (none)'
+
+    lines = [
+        f'📡 Active profile: {current}',
+        f'   chat_id: {p.get("group_chat_id", "(unset)")}',
+        f'   topics:',
+        topic_lines,
+    ]
+    others = [n for n in profiles if n != current]
+    if others:
+        lines.extend(['', f'Other profiles: {", ".join(others)}'])
+    await update.message.reply_text('\n'.join(lines))
+
+
+async def cmd_listcoordinators(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/listcoordinators — owner only."""
+    cfg = load_config()
+    uid = update.effective_user.id
+
+    if not is_owner(uid, cfg):
+        await update.message.reply_text('Sorry, this command is for the bot owner only.')
+        return
+
+    owner_id = cfg.get('owner_id')
+    coord_ids = cfg.get('coordinator_ids', [])
+    lines = [f'👑 Owner: {owner_id}', '', 'Coordinators:']
+    if coord_ids:
+        lines.extend(f'  • {cid}' for cid in coord_ids)
+    else:
+        lines.append('  (none)')
+    await update.message.reply_text('\n'.join(lines))
+
+
 async def _process_schedule_input(
     update: Update, context: ContextTypes.DEFAULT_TYPE, text: str,
 ) -> None:
@@ -1182,12 +1496,12 @@ async def _process_schedule_input(
 
     # Post to group
     cfg = load_config()
-    group_chat_id = cfg.get('group_chat_id')
+    group_chat_id = get_group_chat_id(cfg)
     if not group_chat_id:
         await update.message.reply_text('⚠️ group_chat_id not configured.')
         return
 
-    topics: Dict[str, int] = cfg.get('topics', {})
+    topics: Dict[str, int] = get_topics(cfg)
     topic_id: Optional[int] = None
     for t_name, t_id in topics.items():
         if t_name.lower() == 'attendance':
@@ -1271,6 +1585,15 @@ def main() -> None:
     app.add_handler(CommandHandler('extract', cmd_extract, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('postchecklist', cmd_postchecklist, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('postschedule', cmd_postschedule, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('addcoordinator', cmd_addcoordinator, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('removecoordinator', cmd_removecoordinator, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('listcoordinators', cmd_listcoordinators, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('togglechat', cmd_togglechat, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('currentchat', cmd_currentchat, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('listmembers', cmd_listmembers, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('addmember', cmd_addmember, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('removemember', cmd_removemember, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('movemember', cmd_movemember, filters=filters.ChatType.PRIVATE))
 
     # Inline button — session selection
     app.add_handler(CallbackQueryHandler(handle_extract_callback, pattern=r'^extract_\d+$'))

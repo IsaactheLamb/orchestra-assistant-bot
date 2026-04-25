@@ -17,13 +17,17 @@ EMOJI_EXPECTED_LATE = '🕐'  # expected to be late
 EMOJI_ACTUAL_ONTIME = '✅'   # on time
 EMOJI_ACTUAL_LATE   = '⚠️'  # late
 EMOJI_ACTUAL_ABSENT = '❌'   # absent
-EMOJI_UNSET         = '▫️'   # not yet set
+EMOJI_UNSET         = '▫️'   # not yet set (canonical)
+
+# Accept multiple "blank square" variants that humans/clients use interchangeably.
+# All normalize to EMOJI_UNSET on parse.
+UNSET_EMOJI_VARIANTS: List[str] = ['▫️', '◽️', '◻️', '◾️', '◼️', '⬜️', '⬛️']
 
 STATUS_EMOJIS: List[str] = [
-    EMOJI_EXPECTED_YES, EMOJI_EXPECTED_NO,
+    EMOJI_EXPECTED_YES, EMOJI_EXPECTED_NO, EMOJI_EXPECTED_LATE,
     EMOJI_ACTUAL_ONTIME, EMOJI_ACTUAL_LATE,
-    EMOJI_ACTUAL_ABSENT, EMOJI_UNSET,
-]
+    EMOJI_ACTUAL_ABSENT,
+] + UNSET_EMOJI_VARIANTS
 # Sort longest-first so prefix matching always picks the most specific emoji.
 STATUS_EMOJIS_SORTED = sorted(STATUS_EMOJIS, key=len, reverse=True)
 
@@ -121,8 +125,13 @@ def _normalize_vs(text: str) -> str:
     return text.replace('\uFE0F', '')
 
 
-# Normalized emoji lookup: stripped form → canonical form (with variation selector)
-_STATUS_NORM_MAP = {_normalize_vs(e): e for e in STATUS_EMOJIS}
+# Normalized emoji lookup: stripped form → canonical form (with variation selector).
+# All UNSET_EMOJI_VARIANTS collapse to the canonical EMOJI_UNSET so downstream
+# comparisons (e.g. `actual == EMOJI_ACTUAL_ONTIME`) only need to know one form.
+_STATUS_NORM_MAP: Dict[str, str] = {}
+for _e in STATUS_EMOJIS:
+    _norm = _normalize_vs(_e)
+    _STATUS_NORM_MAP[_norm] = EMOJI_UNSET if _e in UNSET_EMOJI_VARIANTS else _e
 _STATUS_NORM_SORTED = sorted(_STATUS_NORM_MAP.keys(), key=len, reverse=True)
 
 
