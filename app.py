@@ -19,6 +19,7 @@ from handlers import members as members_h
 from handlers import reports as reports_h
 from handlers import settings as settings_h
 from handlers import attendance as attendance_h
+from handlers import checklist as checklist_h
 
 
 logging.basicConfig(
@@ -34,6 +35,8 @@ async def _post_init(app: Application) -> None:
     scheduler.start()
     app.bot_data["scheduler"] = scheduler
     log.info("APScheduler started.")
+    # Restore active checklists from config so live updates survive restarts.
+    checklist_h.load_from_config()
 
 
 async def _post_shutdown(app: Application) -> None:
@@ -72,8 +75,13 @@ def main() -> None:
     for h in settings_h.build_handlers():
         app.add_handler(h)
 
-    # Group attendance listener (group chat messages)
-    app.add_handler(attendance_h.build_handler())
+    # Checklist must run BEFORE attendance so it can short-circuit messages
+    # that target a known checklist via ApplicationHandlerStop.
+    for h in checklist_h.build_handlers():
+        app.add_handler(h, group=0)
+
+    # Group attendance listener — runs only if checklist didn't consume.
+    app.add_handler(attendance_h.build_handler(), group=1)
 
     log.info("Orchestra Bot starting (state-driven mode)…")
     app.run_polling(allowed_updates=["message", "callback_query"])
